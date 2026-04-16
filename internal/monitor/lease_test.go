@@ -35,6 +35,23 @@ func TestClassifyLease(t *testing.T) {
 	}
 }
 
+func TestClassifyLease_CustomThresholds(t *testing.T) {
+	thresholds := Thresholds{
+		Warning:  2 * time.Hour,
+		Critical: 30 * time.Minute,
+	}
+
+	if got := classifyLease(3*time.Hour, thresholds); got != LeaseOK {
+		t.Errorf("expected LeaseOK for ttl above warning, got %d", got)
+	}
+	if got := classifyLease(1*time.Hour, thresholds); got != LeaseWarning {
+		t.Errorf("expected LeaseWarning for ttl between thresholds, got %d", got)
+	}
+	if got := classifyLease(15*time.Minute, thresholds); got != LeaseCritical {
+		t.Errorf("expected LeaseCritical for ttl below critical, got %d", got)
+	}
+}
+
 func TestDefaultThresholds(t *testing.T) {
 	if DefaultThresholds.Warning != 24*time.Hour {
 		t.Errorf("expected default warning=24h, got %v", DefaultThresholds.Warning)
