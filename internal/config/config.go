@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -8,85 +9,65 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds the top-level vaultwatch configuration.
+type AlertSender struct {
+	Type       string `yaml:"type"`
+	WebhookURL string `yaml:"webhook_url,omitempty"`
+	APIKey     string `yaml:"api_key,omitempty"`
+	RoutingKey string `yaml:"routing_key,omitempty"`
+	Team       string `yaml:"team,omitempty"`
+	FromEmail  string `yaml:"from_email,omitempty"`
+	ToEmail    string `yaml:"to_email,omitempty"`
+	SMTPHost   string `yaml:"smtp_host,omitempty"`
+	SMTPPort   int    `yaml:"smtp_port,omitempty"`
+}
+
+type Thresholds struct {
+	Warning  time.Duration `yaml:"warning"`
+	Critical time.Duration `yaml:"critical"`
+}
+
 type Config struct {
-	Vault   VaultConfig   `yaml:"vault"`
-	Alerts  AlertsConfig  `yaml:"alerts"`
-	Monitor MonitorConfig `yaml:"monitor"`
+	VaultAddress string      `yaml:"vault_address"`
+	VaultToken   string      `yaml:"vault_token"`
+	PollInterval time.Duration `yaml:"poll_interval"`
+	Thresholds   Thresholds  `yaml:"thresholds"`
+	Senders      []AlertSender `yaml:"senders"`
 }
 
-// VaultConfig contains Vault connection settings.
-type VaultConfig struct {
-	Address   string `yaml:"address"`
-	Token     string `yaml:"token"`
-	Namespace string `yaml:"namespace"`
-}
-
-// AlertsConfig defines how and when alerts are sent.
-type AlertsConfig struct {
-	WarnBefore  time.Duration `yaml:"warn_before"`
-	CritBefore  time.Duration `yaml:"crit_before"`
-	SlackWebhook string       `yaml:"slack_webhook"`
-	Email        EmailConfig  `yaml:"email"`
-}
-
-// EmailConfig holds SMTP settings for email alerts.
-type EmailConfig struct {
-	Enabled  bool     `yaml:"enabled"`
-	SMTPHost string   `yaml:"smtp_host"`
-	SMTPPort int      `yaml:"smtp_port"`
-	From     string   `yaml:"from"`
-	To       []string `yaml:"to"`
-}
-
-// MonitorConfig controls which secrets are monitored.
-type MonitorConfig struct {
-	Paths    []string      `yaml:"paths"`
-	Interval time.Duration `yaml:"interval"`
-}
-
-// Load reads and parses a YAML config file from the given path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading config file %q: %w", path, err)
+		return nil, fmt.Errorf("config: read file: %w", err)
 	}
-
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file %q: %w", path, err)
+		return nil, fmt.Errorf("config: parse yaml: %w", err)
 	}
-
-	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
+	if cfg.VaultAddress == "" {
+		return nil, errors.New("config: vault_address is required")
 	}
-
-	cfg.applyDefaults()
+	if cfg.VaultToken == "" {
+		if tok := os.Getenv("VAULT_TOKEN"); tok != "" {
+			cfg.VaultToken = tok
+		}
+	}
+	if cfg.PollInterval == 0 {
+		cfg.PollInterval = 60 * time.Second
+	}
+	if cfg.Thresholds.Warning == 0 {
+		cfg.Thresholds.Warning = 72 * time.Hour
+	}
+	if cfg.Thresholds.Critical == 0 {
+		cfg.Thresholds.Critical = 24 * time.Hour
+	}
 	return &cfg, nil
 }
 
-func (c *Config) validate() error {
-	if c.Vault.Address == "" {
-		return fmt.Errorf("vault.address is required")
+// SenderFactory builds Sender instances from config entries.
+func (c *Config) SenderTypes() []string {
+	types := make([]string, 0, len(c.Senders))
+	for _, s := range c.Senders {
+		types = append(types, s.Type)
 	}
-	if c.Vault.Token == "" {
-		if token := os.Getenv("VAULT_TOKEN"); token != "" {
-			c.Vault.Token = token
-		} else {
-			return fmt.Errorf("vault.token is required (or set VAULT_TOKEN env var)")
-		}
-	}
-	return nil
-}
-
-func (c *Config) applyDefaults() {
-	if c.Alerts.WarnBefore == 0 {
-		c.Alerts.WarnBefore = 72 * time.Hour
-	}
-	if c.Alerts.CritBefore == 0 {
-		c.Alerts.CritBefore = 24 * time.Hour
-	}
-	if c.Monitor.Interval == 0 {
-		c.Monitor.Interval = 5 * time.Minute
-	}
+	return types
 }
