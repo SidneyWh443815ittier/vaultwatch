@@ -1,72 +1,72 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/your-org/vaultwatch/internal/alert"
-	"github.com/your-org/vaultwatch/internal/alert/sender"
-	"github.com/your-org/vaultwatch/internal/config"
-	"github.com/your-org/vaultwatch/internal/monitor"
-	"github.com/your-org/vaultwatch/internal/vault"
+	"github.com/yourusername/vaultwatch/internal/alert"
+	"github.com/yourusername/vaultwatch/internal/alert/sender"
+	"github.com/yourusername/vaultwatch/internal/config"
+	"github.com/yourusername/vaultwatch/internal/monitor"
+	"github.com/yourusername/vaultwatch/internal/vault"
 )
 
 func main() {
-	cfgPath := flag.String("config", "vaultwatch.yaml", "path to config file")
-	flag.Parse()
-
-	cfg, err := config.Load(*cfgPath)
-	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+	cfgPath := "vaultwatch.yaml"
+	if v := os.Getenv("VAULTWATCH_CONFIG"); v != "" {
+		cfgPath = v
 	}
-
-	client, err := vault.NewClient(cfg.VaultAddress, cfg.VaultToken)
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		log.Fatalf("failed to create vault client: %v", err)
+		log.Fatalf("config: %v", err)
 	}
-
+	client, err := vault.NewClient(cfg)
+	if err != nil {
+		log.Fatalf("vault client: %v", err)
+	}
 	senders := buildSenders(cfg)
 	notifier := alert.New(senders)
+	leaseMonitor := monitor.New(cfg)
+	runner := monitor.NewRunner(client, leaseMonitor, notifier, cfg)
 
-	runner := monitor.NewRunner(client, notifier, cfg.PollInterval, monitor.Thresholds{
-		Warning:  cfg.Thresholds.Warning,
-		Critical: cfg.Thresholds.Critical,
-	})
-
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-
-	go runner.Run()
-	log.Println("vaultwatch started")
-	<-sig
-	log.Println("shutting down")
+	ctx, stop := signal.NotifyContext(nil, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runner.Run(ctx); err != nil {
+		log.Fatalf("runner: %v", err)
+	}
 }
 
-func buildSenders(cfg *config.Config) []sender.Sender {
-	var out []sender.Sender
-	for _, s := range cfg.Senders {
-		switch s.Type {
-		case "log":
-			out = append(out, sender.NewLogSender())
-		case "webhook":
-			out = append(out, sender.NewWebhookSender(s.WebhookURL))
-		case "slack":
-			out = append(out, sender.NewSlackSender(s.WebhookURL))
-		case "pagerduty":
-			out = append(out, sender.NewPagerDutySender(s.APIKey, s.RoutingKey))
-		case "opsgenie":
-			out = append(out, sender.NewOpsGenieSender(s.APIKey, s.Team))
-		case "victorops":
-			out = append(out, sender.NewVictorOpsSender(s.APIKey, s.RoutingKey))
-		default:
-			log.Printf("unknown sender type %q, skipping", s.Type)
-		}
+func buildSenders(cfg *config.Config) []alert.Sender {
+	var senders []alert.Sender
+	senders = append(senders, sender.NewLogSender())
+	if cfg.Webhook.URL != "" {
+		senders = append(senders, sender.NewWebhookSender(cfg.Webhook.URL))
 	}
-	if len(out) == 0 {
-		out = append(out, sender.NewLogSender())
+	if cfg.Slack.WebhookURL != "" {
+		senders = append(senders, sender.NewSlackSender(cfg.Slack.WebhookURL))
 	}
-	return out
+	if cfg.PagerDuty.RoutingKey != "" {
+		senders = append(senders, sender.NewPagerDutySender(cfg.PagerDuty.RoutingKey))
+	}
+	if cfg.OpsGenie.APIKey != "" {
+		senders = append(senders, sender.NewOpsGenieSender(cfg.OpsGenie.APIKey))
+	}
+	if cfg.VictorOps.APIURL != "" {
+		senders = append(senders, sender.NewVictorOpsSender(cfg.VictorOps.APIURL))
+	}
+	if cfg.Datadog.APIKey != "" {
+		senders = append(senders, sender.NewDatadogSender(cfg.Datadog.APIKey))
+	}
+	if cfg.SNS.TopicARN != "" {
+		senders = append(senders, sender.NewSNSSender(cfg.SNS.TopicARN))
+	}
+	if cfg.Teams.WebhookURL != "" {
+		senders = append(senders, sender.NewTeamsSender(cfg.Teams.WebhookURL))
+	}
+	if cfg.Email.To != "" {
+		senders = append(senders, sender.NewEmailSender(cfg.Email))
+	}
+	return senders
 }
