@@ -14,24 +14,25 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load("vaultwatch.yaml")
+	cfgPath := "vaultwatch.yaml"
+	if v := os.Getenv("VAULTWATCH_CONFIG"); v != "" {
+		cfgPath = v
+	}
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-
 	client, err := vault.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("vault client: %v", err)
 	}
-
 	senders := buildSenders(cfg)
 	notifier := alert.New(senders)
 	leaseMonitor := monitor.New(cfg)
 	runner := monitor.NewRunner(client, leaseMonitor, notifier, cfg)
 
-	ctx, stop := signal.NotifyContext(nil, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(nil, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
 	if err := runner.Run(ctx); err != nil {
 		log.Fatalf("runner: %v", err)
 	}
@@ -40,7 +41,6 @@ func main() {
 func buildSenders(cfg *config.Config) []alert.Sender {
 	var senders []alert.Sender
 	senders = append(senders, sender.NewLogSender())
-
 	if cfg.Alerting.Webhook.URL != "" {
 		senders = append(senders, sender.NewWebhookSender(cfg.Alerting.Webhook.URL))
 	}
@@ -73,6 +73,18 @@ func buildSenders(cfg *config.Config) []alert.Sender {
 	}
 	if cfg.Alerting.Discord.WebhookURL != "" {
 		senders = append(senders, sender.NewDiscordSender(cfg.Alerting.Discord.WebhookURL))
+	}
+	if cfg.Alerting.Splunk.URL != "" {
+		senders = append(senders, sender.NewSplunkSender(cfg.Alerting.Splunk.URL, cfg.Alerting.Splunk.Token))
+	}
+	if cfg.Alerting.Mattermost.WebhookURL != "" {
+		senders = append(senders, sender.NewMattermostSender(cfg.Alerting.Mattermost.WebhookURL))
+	}
+	if cfg.Alerting.Zenduty.APIKey != "" {
+		senders = append(senders, sender.NewZendutySender(cfg.Alerting.Zenduty.APIKey, cfg.Alerting.Zenduty.ServiceID))
+	}
+	if cfg.Alerting.NewRelic.APIKey != "" {
+		senders = append(senders, sender.NewNewRelicSender(cfg.Alerting.NewRelic.APIKey))
 	}
 	return senders
 }
