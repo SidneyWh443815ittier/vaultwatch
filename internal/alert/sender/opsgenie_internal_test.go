@@ -1,7 +1,5 @@
 package sender
 
-import "github.com/yourusername/vaultwatch/internal/alert"
-
-func NewOpsGenieSenderWithURL(apiKey, apiURL string) alert.Sender {
-	return newOpsGenieSenderWithURL(apiKey, apiURL)
+func NewOpsGenieSenderWithURL(apiKey, url string) *opsGenieSender {
+	return newOpsGenieSenderWithURL(apiKey, url)
 }

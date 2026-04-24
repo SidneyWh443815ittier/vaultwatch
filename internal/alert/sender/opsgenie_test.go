@@ -2,7 +2,6 @@ package sender_test
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,26 +14,32 @@ import (
 func TestOpsGenieSender_PostsCorrectPayload(t *testing.T) {
 	var received map[string]interface{}
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		json.Unmarshal(body, &received)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
 		if r.Header.Get("Authorization") != "GenieKey test-key" {
-			t.Errorf("expected GenieKey auth header")
+			t.Errorf("missing or wrong Authorization header: %s", r.Header.Get("Authorization"))
 		}
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer ts.Close()
 
 	s := sender.NewOpsGenieSenderWithURL("test-key", ts.URL)
-	err := s.Send(alert.Alert{
+	a := alert.Alert{
 		LeaseID: "secret/my-app/db",
+		TTL:     2 * time.Hour,
 		Level:   alert.LevelCritical,
-		TTL:     10 * time.Minute,
-	})
-	if err != nil {
+	}
+
+	if err := s.Send(a); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if received["priority"] != "P1" {
 		t.Errorf("expected priority P1, got %v", received["priority"])
+	}
+	if received["message"] == "" {
+		t.Error("expected non-empty message")
 	}
 }
 
@@ -45,11 +50,7 @@ func TestOpsGenieSender_NonSuccessStatusReturnsError(t *testing.T) {
 	defer ts.Close()
 
 	s := sender.NewOpsGenieSenderWithURL("bad-key", ts.URL)
-	err := s.Send(alert.Alert{
-		LeaseID: "secret/x",
-		Level:   alert.LevelWarning,
-		TTL:     30 * time.Minute,
-	})
+	err := s.Send(alert.Alert{Level: alert.LevelWarning, TTL: time.Hour})
 	if err == nil {
 		t.Fatal("expected error for non-2xx status")
 	}
@@ -64,18 +65,20 @@ func TestOpsGenieSender_PriorityMapping(t *testing.T) {
 		{alert.LevelWarning, "P3"},
 		{alert.LevelOK, "P5"},
 	}
+
 	for _, tc := range cases {
 		var received map[string]interface{}
 		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			json.Unmarshal(body, &received)
+			json.NewDecoder(r.Body).Decode(&received)
 			w.WriteHeader(http.StatusAccepted)
 		}))
+
 		s := sender.NewOpsGenieSenderWithURL("k", ts.URL)
 		s.Send(alert.Alert{Level: tc.level, TTL: time.Minute})
-		if received["priority"] != tc.wantPrio {
-			t.Errorf("level %s: want %s got %v", tc.level, tc.wantPrio, received["priority"])
-		}
 		ts.Close()
+
+		if received["priority"] != tc.wantPrio {
+			t.Errorf("level %s: want priority %s, got %v", tc.level, tc.wantPrio, received["priority"])
+		}
 	}
 }

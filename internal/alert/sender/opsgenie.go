@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/yourusername/vaultwatch/internal/alert"
 )
@@ -13,7 +14,7 @@ const defaultOpsGenieURL = "https://api.opsgenie.com/v2/alerts"
 
 type opsGenieSender struct {
 	apiKey  string
-	apiURL  string
+	baseURL string
 	client  *http.Client
 }
 
@@ -25,19 +26,20 @@ type opsGeniePayload struct {
 	Details     map[string]string `json:"details"`
 }
 
-func NewOpsGenieSender(apiKey string) alert.Sender {
+// NewOpsGenieSender creates an OpsGenie alert sender.
+func NewOpsGenieSender(apiKey string) *opsGenieSender {
 	return newOpsGenieSenderWithURL(apiKey, defaultOpsGenieURL)
 }
 
-func newOpsGenieSenderWithURL(apiKey, apiURL string) alert.Sender {
+func newOpsGenieSenderWithURL(apiKey, url string) *opsGenieSender {
 	return &opsGenieSender{
-		apiKey: apiKey,
-		apiURL: apiURL,
-		client: &http.Client{},
+		apiKey:  apiKey,
+		baseURL: url,
+		client:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
-func (o *opsGenieSender) Send(a alert.Alert) error {
+func (s *opsGenieSender) Send(a alert.Alert) error {
 	payload := opsGeniePayload{
 		Message:     fmt.Sprintf("[%s] Vault lease expiring: %s", a.Level, a.LeaseID),
 		Description: fmt.Sprintf("Lease %s expires in %s", a.LeaseID, a.TTL),
@@ -54,14 +56,14 @@ func (o *opsGenieSender) Send(a alert.Alert) error {
 		return fmt.Errorf("opsgenie: marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, o.apiURL, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, s.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("opsgenie: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "GenieKey "+o.apiKey)
+	req.Header.Set("Authorization", "GenieKey "+s.apiKey)
 
-	resp, err := o.client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("opsgenie: send request: %w", err)
 	}
