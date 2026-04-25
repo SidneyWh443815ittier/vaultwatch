@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/yourusername/vaultwatch/internal/alert"
 )
@@ -14,30 +15,38 @@ type googleChatSender struct {
 	client     *http.Client
 }
 
-type gchatPayload struct {
+type googleChatPayload struct {
 	Text string `json:"text"`
 }
 
 // NewGoogleChatSender creates a sender that posts messages to a Google Chat webhook.
 func NewGoogleChatSender(webhookURL string) alert.Sender {
-	return newGoogleChatSenderWithURL(webhookURL, &http.Client{})
+	return newGoogleChatSenderWithURL(webhookURL)
 }
 
-func newGoogleChatSenderWithURL(webhookURL string, client *http.Client) alert.Sender {
-	return &googleChatSender{webhookURL: webhookURL, client: client}
+func newGoogleChatSenderWithURL(webhookURL string) *googleChatSender {
+	return &googleChatSender{
+		webhookURL: webhookURL,
+		client:     &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
 func (g *googleChatSender) Send(a alert.Alert) error {
-	text := fmt.Sprintf("[%s] Lease *%s* expires in %s — %s",
-		a.Level, a.LeaseID, a.TTL, a.Message)
+	body := googleChatPayload{
+		Text: fmt.Sprintf("*[%s] VaultWatch Alert*\nLease: `%s`\nExpires in: %s\n%s",
+			string(a.Level),
+			a.LeaseID,
+			a.TTL.Round(time.Second),
+			a.Message,
+		),
+	}
 
-	payload := gchatPayload{Text: text}
-	body, err := json.Marshal(payload)
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("googlechat: marshal payload: %w", err)
 	}
 
-	resp, err := g.client.Post(g.webhookURL, "application/json", bytes.NewReader(body))
+	resp, err := g.client.Post(g.webhookURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("googlechat: post: %w", err)
 	}
