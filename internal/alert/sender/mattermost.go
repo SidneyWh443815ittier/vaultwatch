@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
-	"github.com/yourusername/vaultwatch/internal/alert"
+	"github.com/yourusername/vaultwatch/internal/monitor"
 )
 
 type mattermostSender struct {
-	webhookURL string
-	client     *http.Client
+	url    string
+	client *http.Client
 }
 
 type mattermostPayload struct {
@@ -19,18 +20,21 @@ type mattermostPayload struct {
 	Username string `json:"username,omitempty"`
 }
 
-// NewMattermostSender creates a Sender that posts messages to a Mattermost incoming webhook.
-func NewMattermostSender(webhookURL string) alert.Sender {
-	return newMattermostSenderWithURL(webhookURL, &http.Client{})
+// NewMattermostSender creates a Sender that posts to a Mattermost incoming webhook.
+func NewMattermostSender(webhookURL string) Sender {
+	return newMattermostSenderWithURL(webhookURL)
 }
 
-func newMattermostSenderWithURL(webhookURL string, client *http.Client) alert.Sender {
-	return &mattermostSender{webhookURL: webhookURL, client: client}
+func newMattermostSenderWithURL(url string) Sender {
+	return &mattermostSender{
+		url:    url,
+		client: &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
-func (m *mattermostSender) Send(a alert.Alert) error {
-	text := fmt.Sprintf("[%s] Lease `%s` expires in %s — %s",
-		a.Level, a.LeaseID, a.TTL.Round(1000000000), a.Message)
+func (m *mattermostSender) Send(level Level, lease monitor.LeaseInfo) error {
+	text := fmt.Sprintf("[%s] Vault lease `%s` expires in %s",
+		level, lease.LeaseID, lease.TTL.Round(time.Second))
 
 	payload := mattermostPayload{
 		Text:     text,
@@ -42,7 +46,7 @@ func (m *mattermostSender) Send(a alert.Alert) error {
 		return fmt.Errorf("mattermost: marshal payload: %w", err)
 	}
 
-	resp, err := m.client.Post(m.webhookURL, "application/json", bytes.NewReader(body))
+	resp, err := m.client.Post(m.url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("mattermost: post: %w", err)
 	}

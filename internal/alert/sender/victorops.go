@@ -7,42 +7,59 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yourusername/vaultwatch/internal/alert"
+	"github.com/yourusername/vaultwatch/internal/monitor"
 )
 
+const defaultVictorOpsURL = "https://alert.victorops.com/integrations/generic/20131114/alert"
+
 type victorOpsSender struct {
-	postURL string
-	client  *http.Client
+	url        string
+	routingKey string
+	client     *http.Client
 }
 
-type victorOpsPayload struct {
+type voPayload struct {
 	MessageType       string `json:"message_type"`
 	EntityID          string `json:"entity_id"`
 	EntityDisplayName string `json:"entity_display_name"`
 	StateMessage      string `json:"state_message"`
-	MonitoringTool    string `json:"monitoring_tool"`
+	Timestamp         int64  `json:"timestamp"`
 }
 
-// NewVictorOpsSender creates a VictorOps (Splunk On-Call) sender.
-func NewVictorOpsSender(routingKey, integrationURL string) *victorOpsSender {
-	url := fmt.Sprintf("%s/%s", integrationURL, routingKey)
-	return newVictorOpsSenderWithURL(url)
-}
-
-func newVictorOpsSenderWithURL(url string) *victorOpsSender {
-	return &victorOpsSender{
-		postURL: url,
-		client:  &http.Client{Timeout: 10 * time.Second},
+func voMessageType(level Level) string {
+	switch level {
+	case LevelCritical:
+		return "CRITICAL"
+	case LevelWarning:
+		return "WARNING"
+	default:
+		return "INFO"
 	}
 }
 
-func (s *victorOpsSender) Send(a alert.Alert) error {
-	payload := victorOpsPayload{
-		MessageType:       voMessageType(a.Level),
-		EntityID:          a.LeaseID,
-		EntityDisplayName: fmt.Sprintf("Vault lease expiring: %s", a.LeaseID),
-		StateMessage:      fmt.Sprintf("Lease %s has TTL %s remaining", a.LeaseID, a.TTL),
-		MonitoringTool:    "vaultwatch",
+// NewVictorOpsSender creates a Sender that posts alerts to VictorOps.
+func NewVictorOpsSender(apiKey, routingKey string) Sender {
+	return newVictorOpsSenderWithURL(
+		fmt.Sprintf("%s/%s/%s", defaultVictorOpsURL, apiKey, routingKey),
+		routingKey,
+	)
+}
+
+func newVictorOpsSenderWithURL(url, routingKey string) Sender {
+	return &victorOpsSender{
+		url:        url,
+		routingKey: routingKey,
+		client:     &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+func (v *victorOpsSender) Send(level Level, lease monitor.LeaseInfo) error {
+	payload := voPayload{
+		MessageType:       voMessageType(level),
+		EntityID:          lease.LeaseID,
+		EntityDisplayName: fmt.Sprintf("Vault lease expiring: %s", lease.LeaseID),
+		StateMessage:      fmt.Sprintf("Lease %s expires in %s", lease.LeaseID, lease.TTL),
+		Timestamp:         time.Now().Unix(),
 	}
 
 	body, err := json.Marshal(payload)
@@ -50,15 +67,9 @@ func (s *victorOpsSender) Send(a alert.Alert) error {
 		return fmt.Errorf("victorops: marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.postURL, bytes.NewReader(body))
+	resp, err := v.client.Post(v.url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("victorops: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("victorops: send request: %w", err)
+		return fmt.Errorf("victorops: post: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -66,15 +77,4 @@ func (s *victorOpsSender) Send(a alert.Alert) error {
 		return fmt.Errorf("victorops: unexpected status %d", resp.StatusCode)
 	}
 	return nil
-}
-
-func voMessageType(level alert.Level) string {
-	switch level {
-	case alert.LevelCritical:
-		return "CRITICAL"
-	case alert.LevelWarning:
-		return "WARNING"
-	default:
-		return "INFO"
-	}
 }

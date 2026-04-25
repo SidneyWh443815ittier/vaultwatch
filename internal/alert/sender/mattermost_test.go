@@ -2,60 +2,59 @@ package sender_test
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/yourusername/vaultwatch/internal/alert"
 	"github.com/yourusername/vaultwatch/internal/alert/sender"
+	"github.com/yourusername/vaultwatch/internal/monitor"
 )
 
 func TestMattermostSender_PostsFormattedMessage(t *testing.T) {
-	var got map[string]string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Fatalf("decode body: %v", err)
-		}
+	var received map[string]interface{}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer ts.Close()
+	defer srv.Close()
 
-	s := sender.NewMattermostSender(ts.URL)
-	a := alert.Alert{
-		LeaseID: "secret/data/myapp",
-		Level:   "warning",
-		TTL:     2 * time.Hour,
-		Message: "expiring soon",
+	s := sender.NewMattermostSender(srv.URL)
+	lease := monitor.LeaseInfo{
+		LeaseID: "secret/data/myapp/db",
+		TTL:     45 * time.Minute,
 	}
 
-	if err := s.Send(a); err != nil {
+	if err := s.Send(sender.LevelWarning, lease); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got["username"] != "vaultwatch" {
-		t.Errorf("expected username vaultwatch, got %q", got["username"])
+	text, ok := received["text"].(string)
+	if !ok || text == "" {
+		t.Fatalf("expected non-empty text field, got %v", received["text"])
 	}
-	if got["text"] == "" {
-		t.Error("expected non-empty text")
+	if !strings.Contains(text, lease.LeaseID) {
+		t.Errorf("text %q does not contain lease ID %q", text, lease.LeaseID)
+	}
+	if received["username"] != "vaultwatch" {
+		t.Errorf("expected username vaultwatch, got %v", received["username"])
 	}
 }
 
 func TestMattermostSender_NonSuccessStatusReturnsError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
 	}))
-	defer ts.Close()
+	defer srv.Close()
 
-	s := sender.NewMattermostSender(ts.URL)
-	a := alert.Alert{
-		LeaseID: "secret/data/myapp",
-		Level:   "critical",
-		TTL:     10 * time.Minute,
-		Message: "lease critical",
-	}
+	s := sender.NewMattermostSender(srv.URL)
+	lease := monitor.LeaseInfo{LeaseID: "kv/my-secret", TTL: 5 * time.Minute}
 
-	if err := s.Send(a); err == nil {
+	if err := s.Send(sender.LevelCritical, lease); err == nil {
 		t.Fatal("expected error for non-2xx status")
 	}
 }
