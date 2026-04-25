@@ -34,6 +34,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
+	// Poll immediately on start before waiting for the first tick.
+	r.poll(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
