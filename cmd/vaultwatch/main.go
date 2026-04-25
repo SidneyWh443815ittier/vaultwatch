@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -14,64 +15,77 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load("vaultwatch.yaml")
+	cfgPath := flag.String("config", "vaultwatch.yaml", "path to config file")
+	flag.Parse()
+
+	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		log.Fatalf("failed to load config: %v", err)
 	}
 
-	client, err := vault.NewClient(cfg)
+	client, err := vault.NewClient(cfg.Vault.Address, cfg.Vault.Token)
 	if err != nil {
-		log.Fatalf("vault client: %v", err)
+		log.Fatalf("failed to create vault client: %v", err)
 	}
 
 	senders := buildSenders(cfg)
-	notifier := alert.New(senders)
-	leaseMonitor := monitor.New(cfg)
-	runner := monitor.NewRunner(client, leaseMonitor, notifier, cfg)
+	notifier := alert.New(senders...)
 
-	ctx, stop := signal.NotifyContext(os.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	leaseMonitor := monitor.New(
+		cfg.Monitor.WarnThreshold,
+		cfg.Monitor.CriticalThreshold,
+	)
 
-	if err := runner.Run(ctx); err != nil {
-		log.Fatalf("runner: %v", err)
-	}
+	runner := monitor.NewRunner(client, leaseMonitor, notifier, cfg.Monitor.PollInterval)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	log.Println("vaultwatch started")
+	go runner.Run()
+	<-sigCh
+	log.Println("vaultwatch shutting down")
 }
 
 func buildSenders(cfg *config.Config) []alert.Sender {
 	var senders []alert.Sender
-	senders = append(senders, sender.NewLogSender())
-	if cfg.Webhook.URL != "" {
-		senders = append(senders, sender.NewWebhookSender(cfg.Webhook.URL))
+
+	for _, sc := range cfg.Alerting.Senders {
+		switch sc.Type {
+		case "log":
+			senders = append(senders, sender.NewLogSender())
+		case "webhook":
+			senders = append(senders, sender.NewWebhookSender(sc.Params["url"]))
+		case "slack":
+			senders = append(senders, sender.NewSlackSender(sc.Params["webhook_url"]))
+		case "pagerduty":
+			senders = append(senders, sender.NewPagerDutySender(sc.Params["routing_key"]))
+		case "opsgenie":
+			senders = append(senders, sender.NewOpsGenieSender(sc.Params["api_key"]))
+		case "datadog":
+			senders = append(senders, sender.NewDatadogSender(sc.Params["api_key"], sc.Params["app_key"]))
+		case "teams":
+			senders = append(senders, sender.NewTeamsSender(sc.Params["webhook_url"]))
+		case "discord":
+			senders = append(senders, sender.NewDiscordSender(sc.Params["webhook_url"]))
+		case "azure_monitor":
+			if cfg.Alerting.AzureMonitor != nil {
+				am := cfg.Alerting.AzureMonitor
+				logType := am.LogType
+				if logType == "" {
+					logType = "VaultWatch"
+				}
+				senders = append(senders, sender.NewAzureMonitorSender(am.WorkspaceID, am.SharedKey, logType))
+			}
+		default:
+			log.Printf("unknown sender type %q, skipping", sc.Type)
+		}
 	}
-	if cfg.Slack.WebhookURL != "" {
-		senders = append(senders, sender.NewSlackSender(cfg.Slack.WebhookURL))
+
+	if len(senders) == 0 {
+		log.Println("no senders configured, defaulting to log sender")
+		senders = append(senders, sender.NewLogSender())
 	}
-	if cfg.PagerDuty.RoutingKey != "" {
-		senders = append(senders, sender.NewPagerDutySender(cfg.PagerDuty.RoutingKey))
-	}
-	if cfg.OpsGenie.APIKey != "" {
-		senders = append(senders, sender.NewOpsGenieSender(cfg.OpsGenie.APIKey))
-	}
-	if cfg.VictorOps.URL != "" {
-		senders = append(senders, sender.NewVictorOpsSender(cfg.VictorOps.URL))
-	}
-	if cfg.Datadog.APIKey != "" {
-		senders = append(senders, sender.NewDatadogSender(cfg.Datadog.APIKey))
-	}
-	if cfg.Teams.WebhookURL != "" {
-		senders = append(senders, sender.NewTeamsSender(cfg.Teams.WebhookURL))
-	}
-	if cfg.GoogleChat.WebhookURL != "" {
-		senders = append(senders, sender.NewGoogleChatSender(cfg.GoogleChat.WebhookURL))
-	}
-	if cfg.Discord.WebhookURL != "" {
-		senders = append(senders, sender.NewDiscordSender(cfg.Discord.WebhookURL))
-	}
-	if cfg.Splunk.URL != "" {
-		senders = append(senders, sender.NewSplunkSender(cfg.Splunk.URL, cfg.Splunk.Token))
-	}
-	if cfg.Grafana.APIKey != "" {
-		senders = append(senders, sender.NewGrafanaSender(cfg.Grafana.APIKey))
-	}
+
 	return senders
 }
