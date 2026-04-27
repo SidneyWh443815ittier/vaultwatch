@@ -19,7 +19,7 @@ type googleChatPayload struct {
 	Text string `json:"text"`
 }
 
-// NewGoogleChatSender creates a sender that posts messages to a Google Chat webhook.
+// NewGoogleChatSender creates a sender that posts alerts to a Google Chat webhook URL.
 func NewGoogleChatSender(webhookURL string) Sender {
 	return newGoogleChatSenderWithURL(webhookURL)
 }
@@ -31,22 +31,18 @@ func newGoogleChatSenderWithURL(webhookURL string) *googleChatSender {
 	}
 }
 
-func (g *googleChatSender) Send(alert Alert) error {
+func (s *googleChatSender) Send(alert Alert) error {
 	body := googleChatPayload{
 		Text: fmt.Sprintf("[%s] %s — %s (expires in %s)",
-			alert.Level,
-			alert.LeaseID,
-			alert.Message,
-			alert.TTL.Round(time.Second),
-		),
+			alert.Level, alert.LeaseID, alert.Message, alert.TTL),
 	}
 
-	raw, err := json.Marshal(body)
+	data, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("googlechat: marshal payload: %w", err)
 	}
 
-	resp, err := g.client.Post(g.webhookURL, "application/json", bytes.NewReader(raw))
+	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("googlechat: post: %w", err)
 	}

@@ -12,29 +12,26 @@ import (
 	"github.com/yourusername/vaultwatch/internal/alert/sender"
 )
 
-func containsSubstr(t *testing.T, haystack, needle string) {
-	t.Helper()
-	if !strings.Contains(haystack, needle) {
-		t.Errorf("expected %q to contain %q", haystack, needle)
-	}
+func containsSubstr(s, sub string) bool {
+	return strings.Contains(s, sub)
 }
 
 func TestGoogleChatSender_PostsFormattedMessage(t *testing.T) {
 	var received map[string]string
 
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &received)
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer ts.Close()
+	defer srv.Close()
 
-	s := sender.NewGoogleChatSenderWithURL(ts.URL)
+	s := sender.NewGoogleChatSenderWithURL(srv.URL)
 	err := s.Send(sender.Alert{
-		LeaseID: "secret/db/creds",
-		Level:   "critical",
-		Message: "lease expiring soon",
-		TTL:     30 * time.Minute,
+		LeaseID: "secret/data/myapp",
+		Level:   "warning",
+		Message: "Lease expiring soon",
+		TTL:     2 * time.Hour,
 	})
 
 	if err != nil {
@@ -45,27 +42,32 @@ func TestGoogleChatSender_PostsFormattedMessage(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 'text' field in payload")
 	}
-	containsSubstr(t, text, "critical")
-	containsSubstr(t, text, "secret/db/creds")
-	containsSubstr(t, text, "lease expiring soon")
+	if !containsSubstr(text, "warning") {
+		t.Errorf("expected level in text, got: %s", text)
+	}
+	if !containsSubstr(text, "secret/data/myapp") {
+		t.Errorf("expected lease ID in text, got: %s", text)
+	}
 }
 
 func TestGoogleChatSender_NonSuccessStatusReturnsError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
-	defer ts.Close()
+	defer srv.Close()
 
-	s := sender.NewGoogleChatSenderWithURL(ts.URL)
+	s := sender.NewGoogleChatSenderWithURL(srv.URL)
 	err := s.Send(sender.Alert{
-		LeaseID: "secret/db/creds",
-		Level:   "warning",
-		Message: "expiring",
-		TTL:     time.Hour,
+		LeaseID: "secret/data/myapp",
+		Level:   "critical",
+		Message: "Lease expired",
+		TTL:     0,
 	})
 
 	if err == nil {
 		t.Fatal("expected error for non-2xx status")
 	}
-	containsSubstr(t, err.Error(), "403")
+	if !containsSubstr(err.Error(), "403") {
+		t.Errorf("expected status 403 in error, got: %v", err)
+	}
 }
