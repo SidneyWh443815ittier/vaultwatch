@@ -3,11 +3,13 @@ package sender
 import "net/http"
 
 // NewGoogleChatSenderWithURL exposes the internal constructor for testing.
-func NewGoogleChatSenderWithURL(webhookURL string) *googleChatSender {
-	return newGoogleChatSenderWithURL(webhookURL)
+func NewGoogleChatSenderWithURL(webhookURL string, client *http.Client) *googleChatSender {
+	s := newGoogleChatSenderWithURL(webhookURL)
+	if client != nil {
+		s.client = client
+	}
+	return s
 }
 
-// SetClient replaces the HTTP client on a googleChatSender (test helper).
-func (s *googleChatSender) SetClient(c *http.Client) {
-	s.client = c
-}
+// GoogleChatPayload exposes the payload struct for assertion in tests.
+type GoogleChatPayload = googleChatPayload

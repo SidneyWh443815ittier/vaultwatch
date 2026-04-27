@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -15,76 +14,62 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("config", "vaultwatch.yaml", "path to config file")
-	flag.Parse()
-
-	cfg, err := config.Load(*cfgPath)
+	cfg, err := config.Load("vaultwatch.yaml")
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Fatalf("config: %v", err)
 	}
 
-	client, err := vault.NewClient(cfg.Vault.Address, cfg.Vault.Token)
+	client, err := vault.NewClient(cfg)
 	if err != nil {
-		log.Fatalf("failed to create vault client: %v", err)
+		log.Fatalf("vault client: %v", err)
 	}
 
 	senders := buildSenders(cfg)
-	notifier := alert.New(senders...)
+	notifier := alert.New(senders)
+	leaseMon := monitor.New(cfg)
+	runner := monitor.NewRunner(client, leaseMon, notifier, cfg)
 
-	leaseMonitor := monitor.New(
-		cfg.Monitor.WarnThreshold,
-		cfg.Monitor.CriticalThreshold,
-	)
+	ctx, stop := signal.NotifyContext(os.Context(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	runner := monitor.NewRunner(client, leaseMonitor, notifier, cfg.Monitor.PollInterval)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	log.Println("vaultwatch started")
-	go runner.Run()
-	<-sigCh
-	log.Println("vaultwatch shutting down")
+	if err := runner.Run(ctx); err != nil {
+		log.Fatalf("runner: %v", err)
+	}
 }
 
-func buildSenders(cfg *config.Config) []alert.Sender {
-	var senders []alert.Sender
+func buildSenders(cfg *config.Config) []sender.Sender {
+	var senders []sender.Sender
 
-	for _, sc := range cfg.Alerting.Senders {
-		switch sc.Type {
-		case "log":
-			senders = append(senders, sender.NewLogSender())
-		case "webhook":
-			senders = append(senders, sender.NewWebhookSender(sc.Params["url"]))
-		case "slack":
-			senders = append(senders, sender.NewSlackSender(sc.Params["webhook_url"]))
-		case "pagerduty":
-			senders = append(senders, sender.NewPagerDutySender(sc.Params["routing_key"]))
-		case "opsgenie":
-			senders = append(senders, sender.NewOpsGenieSender(sc.Params["api_key"]))
-		case "datadog":
-			senders = append(senders, sender.NewDatadogSender(sc.Params["api_key"], sc.Params["app_key"]))
-		case "teams":
-			senders = append(senders, sender.NewTeamsSender(sc.Params["webhook_url"]))
-		case "discord":
-			senders = append(senders, sender.NewDiscordSender(sc.Params["webhook_url"]))
-		case "azure_monitor":
-			if cfg.Alerting.AzureMonitor != nil {
-				am := cfg.Alerting.AzureMonitor
-				logType := am.LogType
-				if logType == "" {
-					logType = "VaultWatch"
-				}
-				senders = append(senders, sender.NewAzureMonitorSender(am.WorkspaceID, am.SharedKey, logType))
-			}
-		default:
-			log.Printf("unknown sender type %q, skipping", sc.Type)
-		}
+	senders = append(senders, sender.NewLogSender(log.Default()))
+
+	if cfg.Alerting.Webhook.URL != "" {
+		senders = append(senders, sender.NewWebhookSender(cfg.Alerting.Webhook.URL))
 	}
-
-	if len(senders) == 0 {
-		log.Println("no senders configured, defaulting to log sender")
-		senders = append(senders, sender.NewLogSender())
+	if cfg.Alerting.Slack.WebhookURL != "" {
+		senders = append(senders, sender.NewSlackSender(cfg.Alerting.Slack.WebhookURL))
+	}
+	if cfg.Alerting.PagerDuty.IntegrationKey != "" {
+		senders = append(senders, sender.NewPagerDutySender(cfg.Alerting.PagerDuty.IntegrationKey))
+	}
+	if cfg.Alerting.OpsGenie.APIKey != "" {
+		senders = append(senders, sender.NewOpsGenieSender(cfg.Alerting.OpsGenie.APIKey))
+	}
+	if cfg.Alerting.GoogleChat.WebhookURL != "" {
+		senders = append(senders, sender.NewGoogleChatSender(cfg.Alerting.GoogleChat.WebhookURL))
+	}
+	if cfg.Alerting.Email.Host != "" {
+		senders = append(senders, sender.NewEmailSender(
+			cfg.Alerting.Email.Host,
+			cfg.Alerting.Email.Port,
+			cfg.Alerting.Email.From,
+			cfg.Alerting.Email.To,
+		))
+	}
+	if cfg.Alerting.Discord.WebhookURL != "" {
+		senders = append(senders, sender.NewDiscordSender(cfg.Alerting.Discord.WebhookURL))
+	}
+	if cfg.Alerting.Teams.WebhookURL != "" {
+		senders = append(senders, sender.NewTeamsSender(cfg.Alerting.Teams.WebhookURL))
 	}
 
 	return senders
