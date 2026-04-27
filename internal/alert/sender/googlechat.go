@@ -34,19 +34,15 @@ func newGoogleChatSenderWithURL(webhookURL string) *googleChatSender {
 func (s *googleChatSender) Send(alert Alert) error {
 	body := googleChatPayload{
 		Text: fmt.Sprintf("[%s] %s — %s (expires in %s)",
-			alert.Level,
-			alert.LeaseID,
-			alert.Path,
-			alert.TTL.Round(time.Second),
-		),
+			alert.Level, alert.LeaseID, alert.Message, alert.TTL),
 	}
 
-	data, err := json.Marshal(body)
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("googlechat: marshal payload: %w", err)
 	}
 
-	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(data))
+	resp, err := s.client.Post(s.webhookURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("googlechat: post: %w", err)
 	}
